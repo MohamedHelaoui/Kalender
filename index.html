@@ -8,10 +8,8 @@
 <title>Semesterplaner HFU</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Figtree:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script src="firebase-config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="supabase-config.js"></script>
 <style>
 /* Layout: Wochenraster links als Arbeitsfläche, schmale Seitenleiste rechts mit Stundenkonto und Import. Schwarzwald-Tanne als Akzent. */
 html { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
@@ -84,6 +82,8 @@ header.top { display: flex; flex-wrap: wrap; align-items: flex-end; justify-cont
 @media (max-width: 980px) { .layout { grid-template-columns: minmax(0, 1fr); } }
 .layout.nopanel { grid-template-columns: minmax(0, 1fr); }
 .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.acc-form { display: grid; gap: 8px; }
+.acc-form input { padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); width: 100%; min-width: 0; }
 .acc-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 label.btn { cursor: pointer; display: inline-flex; align-items: center; }
 .tb-left { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
@@ -261,6 +261,29 @@ details textarea { width: 100%; min-height: 90px; margin-top: 6px; padding: 8px;
     </section>
 
     <aside id="aside">
+      <section class="panel" aria-labelledby="aTitle" id="accPanel">
+        <h2 id="aTitle">Konto &amp; Sicherung</h2>
+        <p class="note" id="accState">Lädt …</p>
+        <form class="acc-form" id="accForm" hidden>
+          <label class="field"><span>E-Mail</span><input type="email" id="accEmail" autocomplete="email" required></label>
+          <label class="field"><span>Passwort</span><input type="password" id="accPass" autocomplete="current-password" minlength="6" required></label>
+          <div class="acc-actions">
+            <button class="btn primary small" type="submit" id="signInBtn">Anmelden</button>
+            <button class="btn small" type="button" id="signUpBtn">Konto erstellen</button>
+          </div>
+        </form>
+        <div class="acc-actions">
+          <button class="btn small" id="signOutBtn" hidden>Abmelden</button>
+        </div>
+        <p class="err-text" id="accErr" hidden></p>
+        <p class="note" id="accOk" hidden></p>
+        <div class="acc-actions">
+          <button class="btn small" id="exportBtn">Sicherung herunterladen</button>
+          <label class="btn small" for="backupFile">Sicherung laden</label>
+          <input type="file" id="backupFile" accept=".json,application/json" hidden>
+        </div>
+        <div class="import-status" id="backupMsg" hidden></div>
+      </section>
       <section class="panel" aria-labelledby="hTitle">
         <div class="panel-head">
           <h2 id="hTitle">Stundenkonto</h2>
@@ -275,21 +298,7 @@ details textarea { width: 100%; min-height: 90px; margin-top: 6px; padding: 8px;
         <p class="note" id="limitNote">Richtwert für Werkstudierende: höchstens 20 h pro Woche in der Vorlesungszeit.</p>
       </section>
 
-      <section class="panel" aria-labelledby="aTitle">
-        <h2 id="aTitle">Konto &amp; Sicherung</h2>
-        <p class="note" id="accState">Lädt …</p>
-        <div class="acc-actions">
-          <button class="btn primary small" id="signInBtn" hidden>Mit Google anmelden</button>
-          <button class="btn small" id="signOutBtn" hidden>Abmelden</button>
-        </div>
-        <p class="err-text" id="accErr" hidden></p>
-        <div class="acc-actions">
-          <button class="btn small" id="exportBtn">Sicherung herunterladen</button>
-          <label class="btn small" for="backupFile">Sicherung laden</label>
-          <input type="file" id="backupFile" accept=".json,application/json" hidden>
-        </div>
-        <div class="import-status" id="backupMsg" hidden></div>
-      </section>
+
 
       <section class="panel" aria-labelledby="iTitle">
         <h2 id="iTitle">Stundenplan der HFU</h2>
@@ -438,15 +447,15 @@ details textarea { width: 100%; min-height: 90px; margin-top: 6px; padding: 8px;
     };
   }
 
-  // ---------- Speicher: Firebase (Google-Login, Firestore), sonst nur im Browser ----------
-  const store = { fs: null, auth: null, uid: null, user: null, busy: false, pending: { planner: false, plan: false }, timer: null, unsub: [], lastSent: { planner: "", plan: "" } };
+  // ---------- Speicher: Supabase (E-Mail-Login, Tabelle planner_docs), sonst nur im Browser ----------
+  const store = { sb: null, uid: null, user: null, busy: false, pending: { planner: false, plan: false }, timer: null, channel: null, lastSent: { planner: "", plan: "" } };
   const saveEl = document.getElementById("saveState");
   function setSaveText(t) { saveEl.textContent = t; }
-  const userDocs = () => store.fs.collection("users").doc(store.uid).collection("docs");
+  const DOC = { planner: "planner", plan: "stundenplan" };
 
   function scheduleSave(which) {
     saveLocal();
-    if (!store.uid) { setSaveText(store.auth ? "Nicht angemeldet · nur auf diesem Gerät" : "Nur auf diesem Gerät gespeichert"); return; }
+    if (!store.uid) { setSaveText(store.sb ? "Nicht angemeldet · nur auf diesem Gerät" : "Nur auf diesem Gerät gespeichert"); return; }
     store.pending[which] = true;
     setSaveText("Speichert …");
     clearTimeout(store.timer);
@@ -456,23 +465,22 @@ details textarea { width: 100%; min-height: 90px; margin-top: 6px; padding: 8px;
     if (!store.uid) return;
     if (store.busy) { clearTimeout(store.timer); store.timer = setTimeout(flush, 400); return; }
     store.busy = true;
+    let failed = false;
     try {
-      const col = userDocs();
-      if (store.pending.planner) {
-        store.pending.planner = false;
-        const body = JSON.stringify(state); store.lastSent.planner = body;
-        await col.doc("planner").set({ json: body, updatedAt: new Date().toISOString() });
+      for (const which of ["planner", "plan"]) {
+        if (!store.pending[which]) continue;
+        store.pending[which] = false;
+        const body = JSON.stringify(which === "planner" ? state : imported);
+        store.lastSent[which] = body;
+        const { error } = await store.sb.from("planner_docs").upsert({ user_id: store.uid, doc: DOC[which], json: body, updated_at: new Date().toISOString() });
+        if (error) { failed = true; store.pending[which] = true; }
       }
-      if (store.pending.plan) {
-        store.pending.plan = false;
-        const body = JSON.stringify(imported); store.lastSent.plan = body;
-        await col.doc("stundenplan").set({ json: body, updatedAt: new Date().toISOString() });
-      }
-      setSaveText("Gespeichert · synchronisiert");
-    } catch (e) {
-      setSaveText("Offline · wird später synchronisiert");
-    } finally { store.busy = false; }
+    } catch (e) { failed = true; }
+    finally { store.busy = false; }
+    if (failed) { setSaveText("Offline · neuer Versuch gleich"); clearTimeout(store.timer); store.timer = setTimeout(flush, 15000); }
+    else setSaveText("Gespeichert · synchronisiert");
   }
+  window.addEventListener("online", () => { if (store.uid && (store.pending.planner || store.pending.plan)) flush(); });
 
   function applyRemote(which, json) {
     if (!json) return false;
@@ -482,81 +490,111 @@ details textarea { width: 100%; min-height: 90px; margin-top: 6px; padding: 8px;
       return true;
     } catch (e) { return false; }
   }
+  function rerender() { saveLocal(); if (!modalRoot.firstChild) renderAll(); else { renderGrid(); renderHours(); } }
+
+  async function pull() {
+    const { data, error } = await store.sb.from("planner_docs").select("doc,json").eq("user_id", store.uid);
+    if (error) throw error;
+    const got = {}; (data || []).forEach(r => { got[r.doc] = r.json; });
+    let changed = false;
+    if (got.planner) changed = applyRemote("planner", got.planner) || changed; else store.pending.planner = true;
+    if (got.stundenplan) changed = applyRemote("plan", got.stundenplan) || changed; else if (imported.events.length) store.pending.plan = true;
+    return changed;
+  }
 
   async function onSignedIn(user) {
-    store.user = user; store.uid = user.uid;
+    if (store.uid === user.id) return;
+    store.user = user; store.uid = user.id;
     renderAccount();
     setSaveText("Lädt …");
     try {
-      const col = userDocs();
-      const [p, sp] = await Promise.all([col.doc("planner").get(), col.doc("stundenplan").get()]);
-      if (p.exists && p.data().json) applyRemote("planner", p.data().json); else store.pending.planner = true;
-      if (sp.exists && sp.data().json) applyRemote("plan", sp.data().json); else if (imported.events.length) store.pending.plan = true;
+      await pull();
       saveLocal(); renderAll();
       if (store.pending.planner || store.pending.plan) await flush(); else setSaveText("Gespeichert · synchronisiert");
       // Live-Sync: Änderungen von anderen Geräten übernehmen
-      [["planner", "planner"], ["stundenplan", "plan"]].forEach(([doc, which]) => {
-        store.unsub.push(col.doc(doc).onSnapshot(snap => {
-          if (snap.metadata.hasPendingWrites || !snap.exists) return;
-          const json = snap.data().json;
-          if (json === store.lastSent[which] && !store.pending[which]) return;
-          if (store.pending[which]) return;
-          if (applyRemote(which, json)) { saveLocal(); if (!modalRoot.firstChild) renderAll(); else { renderGrid(); renderHours(); } }
-        }, () => {}));
-      });
+      store.channel = store.sb.channel("planner-" + user.id)
+        .on("postgres_changes", { event: "*", schema: "public", table: "planner_docs", filter: "user_id=eq." + user.id }, payload => {
+          const row = payload.new; if (!row || !row.doc) return;
+          const which = row.doc === "planner" ? "planner" : "plan";
+          if (store.pending[which] || row.json === store.lastSent[which]) return;
+          if (applyRemote(which, row.json)) rerender();
+        })
+        .subscribe();
     } catch (e) {
       setSaveText("Sync nicht erreichbar · nur auf diesem Gerät");
     }
   }
   function onSignedOut() {
-    store.unsub.forEach(u => { try { u(); } catch (e) {} }); store.unsub = [];
+    if (store.channel) { try { store.sb.removeChannel(store.channel); } catch (e) {} store.channel = null; }
     store.uid = null; store.user = null;
     renderAccount();
-    setSaveText(store.auth ? "Nicht angemeldet · nur auf diesem Gerät" : "Nur auf diesem Gerät gespeichert");
+    setSaveText(store.sb ? "Nicht angemeldet · nur auf diesem Gerät" : "Nur auf diesem Gerät gespeichert");
   }
+  // Beim Zurückkehren zur Seite (z. B. Handy aus dem Hintergrund) frisch laden
+  document.addEventListener("visibilitychange", async () => {
+    if (document.visibilityState !== "visible" || !store.uid || store.pending.planner || store.pending.plan) return;
+    try { if (await pull()) rerender(); } catch (e) {}
+  });
 
   function connectStore() {
-    const cfg = window.FIREBASE_CONFIG;
-    if (!window.firebase || !cfg || !cfg.apiKey) { renderAccount(); setSaveText("Nur auf diesem Gerät gespeichert"); return; }
+    const cfg = window.SUPABASE_CONFIG;
+    if (!window.supabase || !cfg || !cfg.url || !cfg.key) { renderAccount(); setSaveText("Nur auf diesem Gerät gespeichert"); return; }
     try {
-      firebase.initializeApp(cfg);
-      store.auth = firebase.auth();
-      store.fs = firebase.firestore();
-      store.fs.enablePersistence({ synchronizeTabs: true }).catch(() => {});
-      store.auth.getRedirectResult().catch(() => {});
-      store.auth.onAuthStateChanged(u => { u ? onSignedIn(u) : onSignedOut(); });
-    } catch (e) { store.auth = null; renderAccount(); setSaveText("Nur auf diesem Gerät gespeichert"); }
+      store.sb = window.supabase.createClient(cfg.url, cfg.key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
+      renderAccount();
+      store.sb.auth.onAuthStateChange((event, session) => {
+        const u = session && session.user;
+        setTimeout(() => { u ? onSignedIn(u) : (store.uid && onSignedOut()); }, 0);
+      });
+      store.sb.auth.getSession().then(({ data }) => { if (!data.session) onSignedOut(); });
+    } catch (e) { store.sb = null; renderAccount(); setSaveText("Nur auf diesem Gerät gespeichert"); }
   }
-  async function signIn() {
-    if (!store.auth) return;
-    const provider = new firebase.auth.GoogleAuthProvider();
-    try { await store.auth.signInWithPopup(provider); }
-    catch (e) {
-      if (e && (e.code === "auth/popup-blocked" || e.code === "auth/operation-not-supported-in-this-environment")) { try { await store.auth.signInWithRedirect(provider); } catch (e2) { showAccountError(e2); } }
-      else if (e && e.code !== "auth/popup-closed-by-user" && e.code !== "auth/cancelled-popup-request") showAccountError(e);
-    }
+  function accMsg(err, ok) {
+    const e = document.getElementById("accErr"), o = document.getElementById("accOk");
+    e.hidden = !err; e.textContent = err || "";
+    o.hidden = !ok; o.textContent = ok || "";
   }
-  function showAccountError(e) {
-    const el = document.getElementById("accErr");
-    const code = e && e.code || "";
-    el.textContent = code === "auth/unauthorized-domain"
-      ? "Diese Adresse ist in Firebase noch nicht erlaubt. Trag sie unter Authentication › Einstellungen › Autorisierte Domains ein."
-      : "Anmelden hat nicht geklappt" + (code ? " (" + code + ")" : "") + ". Versuch es noch einmal.";
-    el.hidden = false;
+  function authErrorText(error) {
+    const m = (error && error.message || "").toLowerCase();
+    if (m.includes("invalid login")) return "E-Mail oder Passwort stimmt nicht.";
+    if (m.includes("email not confirmed")) return "Bestätige zuerst deine E-Mail-Adresse über den Link in der Mail, dann melde dich an.";
+    if (m.includes("already registered")) return "Für diese E-Mail gibt es schon ein Konto. Melde dich einfach an.";
+    if (m.includes("password")) return "Das Passwort muss mindestens 6 Zeichen lang sein.";
+    if (m.includes("rate limit")) return "Zu viele Versuche. Warte ein paar Minuten und versuch es dann noch einmal.";
+    return "Das hat nicht geklappt" + (error && error.message ? " (" + error.message + ")" : "") + ".";
+  }
+  async function signIn(ev) {
+    if (ev) ev.preventDefault();
+    if (!store.sb) return;
+    const email = document.getElementById("accEmail").value.trim(), password = document.getElementById("accPass").value;
+    if (!email || !password) { accMsg("Gib E-Mail und Passwort ein."); return; }
+    accMsg("", "Meldet an …");
+    const { error } = await store.sb.auth.signInWithPassword({ email, password });
+    if (error) accMsg(authErrorText(error)); else { accMsg(); document.getElementById("accPass").value = ""; }
+  }
+  async function signUp() {
+    if (!store.sb) return;
+    const email = document.getElementById("accEmail").value.trim(), password = document.getElementById("accPass").value;
+    if (!email || password.length < 6) { accMsg("Gib deine E-Mail und ein Passwort mit mindestens 6 Zeichen ein."); return; }
+    accMsg("", "Erstellt Konto …");
+    const redirect = location.origin + location.pathname;
+    const { data, error } = await store.sb.auth.signUp({ email, password, options: { emailRedirectTo: redirect } });
+    if (error) { accMsg(authErrorText(error)); return; }
+    if (data && data.session) accMsg("", "Konto erstellt, du bist angemeldet.");
+    else accMsg("", "Konto erstellt. Öffne die Bestätigungs-Mail und klick auf den Link. Danach meldest du dich hier mit E-Mail und Passwort an.");
   }
   function renderAccount() {
-    const st = document.getElementById("accState"), inB = document.getElementById("signInBtn"), outB = document.getElementById("signOutBtn"), hdr = document.getElementById("hdrSignIn");
-    document.getElementById("accErr").hidden = true;
-    if (!store.auth) {
-      st.textContent = "Sync ist noch nicht eingerichtet. Deine Daten bleiben in diesem Browser. Trag deine Firebase-Daten in firebase-config.js ein, um zwischen Geräten zu synchronisieren.";
-      inB.hidden = true; outB.hidden = true; hdr.hidden = true; return;
+    const st = document.getElementById("accState"), form = document.getElementById("accForm"), outB = document.getElementById("signOutBtn"), hdr = document.getElementById("hdrSignIn");
+    if (!store.sb) {
+      st.textContent = "Sync ist nicht erreichbar. Deine Daten bleiben vorerst in diesem Browser.";
+      form.hidden = true; outB.hidden = true; hdr.hidden = true; return;
     }
     if (store.user) {
-      st.textContent = "Angemeldet als " + (store.user.email || store.user.displayName || "Google-Konto") + ". Änderungen erscheinen auf allen Geräten, auf denen du angemeldet bist.";
-      inB.hidden = true; outB.hidden = false; hdr.hidden = true;
+      st.textContent = "Angemeldet als " + (store.user.email || "dein Konto") + ". Änderungen erscheinen auf allen Geräten, auf denen du angemeldet bist.";
+      form.hidden = true; outB.hidden = false; hdr.hidden = true; accMsg();
     } else {
       st.textContent = "Melde dich an, damit dein Kalender auf Handy und Laptop gleich ist. Ohne Anmeldung bleibt alles nur auf diesem Gerät.";
-      inB.hidden = false; outB.hidden = true; hdr.hidden = false;
+      form.hidden = false; outB.hidden = true; hdr.hidden = false;
     }
   }
 
@@ -1287,9 +1325,14 @@ details textarea { width: 100%; min-height: 90px; margin-top: 6px; padding: 8px;
   document.getElementById("icsPasteBtn").addEventListener("click", () => doImport(document.getElementById("icsPaste").value));
   setInterval(() => { renderGrid(); }, 60000);
 
-  document.getElementById("signInBtn").addEventListener("click", signIn);
-  document.getElementById("hdrSignIn").addEventListener("click", signIn);
-  document.getElementById("signOutBtn").addEventListener("click", () => { if (store.auth) store.auth.signOut(); });
+  document.getElementById("accForm").addEventListener("submit", signIn);
+  document.getElementById("signUpBtn").addEventListener("click", signUp);
+  document.getElementById("hdrSignIn").addEventListener("click", () => {
+    if (!showPanel) { showPanel = true; saveView(); renderPanel(); }
+    document.getElementById("accPanel").scrollIntoView({ behavior: "smooth", block: "start" });
+    setTimeout(() => document.getElementById("accEmail").focus(), 300);
+  });
+  document.getElementById("signOutBtn").addEventListener("click", () => { if (store.sb) store.sb.auth.signOut(); });
   document.getElementById("exportBtn").addEventListener("click", exportBackup);
   document.getElementById("backupFile").addEventListener("change", e => { importBackup(e.target.files[0]); e.target.value = ""; });
 
