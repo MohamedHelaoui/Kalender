@@ -82,6 +82,7 @@ header.top { display: flex; flex-wrap: wrap; align-items: flex-end; justify-cont
 @media (max-width: 980px) { .layout { grid-template-columns: minmax(0, 1fr); } }
 .layout.nopanel { grid-template-columns: minmax(0, 1fr); }
 .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.imp-target select { padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
 .acc-form { display: grid; gap: 8px; }
 .acc-form input { padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); width: 100%; min-width: 0; }
 .acc-actions { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -147,6 +148,11 @@ label.btn { cursor: pointer; display: inline-flex; align-items: center; }
 .ev .m { font-family: var(--f-mono); font-size: 0.66rem; color: var(--muted); display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ev.past { opacity: 0.62; }
 .ev .rep { float: right; font-family: var(--f-mono); color: var(--muted); }
+.ev.prayer { z-index: 2; padding: 1px 6px; font-size: 0.68rem; display: flex; align-items: center; gap: 6px; }
+.ev.prayer .t { font-weight: 600; }
+.ev.prayer .m { display: none; }
+.ev.prayer.pin { box-shadow: 0 1px 3px -1px color-mix(in oklab, var(--ink) 35%, transparent); background: color-mix(in oklab, var(--c) 22%, var(--surface)); }
+.ev.prayer:not(.pin)::after { content: attr(data-time); margin-left: auto; font-family: var(--f-mono); font-size: 0.64rem; color: var(--muted); }
 .nowline { position: absolute; left: -1px; right: 0; height: 2px; background: var(--now); z-index: 3; pointer-events: none; }
 .nowline::before { content: ""; position: absolute; left: -4px; top: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--now); }
 .cal-foot { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px; border-top: 1px solid var(--line); align-items: center; }
@@ -301,11 +307,14 @@ details textarea { width: 100%; min-height: 90px; margin-top: 6px; padding: 8px;
 
 
       <section class="panel" aria-labelledby="iTitle">
-        <h2 id="iTitle">Stundenplan der HFU</h2>
+        <h2 id="iTitle">Kalender importieren</h2>
         <ol class="steps">
-          <li>Kalenderdatei über deinen Starplan-Link herunterladen.</li>
-          <li>Die Datei (.ics) hier ablegen. Ein erneuter Import ersetzt den alten Stundenplan.</li>
+          <li>Stundenplan: Kalenderdatei über deinen Starplan-Link herunterladen.</li>
+          <li>Die Datei (.ics) hier ablegen. Gebetszeiten werden automatisch erkannt und getrennt vom Stundenplan gespeichert.</li>
         </ol>
+        <label class="field imp-target"><span>Importieren als</span>
+          <select id="impTarget"><option value="auto">Automatisch erkennen</option><option value="plan">Stundenplan (ersetzt den alten)</option><option value="prayer">Gebetszeiten (ergänzt die Monate)</option></select>
+        </label>
         <div class="url">
           <input id="icalUrl" aria-label="Starplan-Link" spellcheck="false">
           <a class="btn small" id="icalOpen" href="#" target="_blank" rel="noopener">Öffnen</a>
@@ -321,6 +330,8 @@ details textarea { width: 100%; min-height: 90px; margin-top: 6px; padding: 8px;
           <button class="btn small" id="icsPasteBtn">Importieren</button>
         </details>
         <div class="import-status" id="importStatus">Noch kein Stundenplan importiert.</div>
+        <div class="import-status" id="prayerStatus" hidden></div>
+        <div class="acc-actions"><button class="btn small danger" id="prayerDel" hidden>Gebetszeiten entfernen</button></div>
       </section>
     </aside>
   </div>
@@ -347,6 +358,7 @@ details textarea { width: 100%; min-height: 90px; margin-top: 6px; padding: 8px;
       { id: "zaytouna", name: "Zaytouna", color: "#6e7f22", track: false },
       { id: "hiwi", name: "Hiwi Bib", color: "", track: true },
       { id: "werk", name: "Werkstudent", color: "", track: true },
+      { id: "gebet", name: "Gebet", color: "#3f8f5a", track: false },
       { id: "hobby", name: "Hobby", color: "", track: false },
       { id: "sonst", name: "Sonstiges", color: "", track: false }
     ];
@@ -438,10 +450,17 @@ details textarea { width: 100%; min-height: 90px; margin-top: 6px; padding: 8px;
     const d = defaultState();
     let cl = s.settings && Array.isArray(s.settings.cats) ? s.settings.cats.map(c => Object.assign({}, c)) : d.settings.cats;
     Object.keys(BUILTIN).forEach(id => { if (BUILTIN[id].lock && !cl.some(c => c.id === id)) cl.push(d.settings.cats.find(c => c.id === id)); });
+    if (!(s.settings && s.settings.gebetCat) && !cl.some(c => c.id === "gebet")) {
+      const g = d.settings.cats.find(c => c.id === "gebet"); const i = cl.findIndex(c => c.id === "hobby");
+      i >= 0 ? cl.splice(i, 0, g) : cl.push(g);
+    }
+    const pr = s.prayer && Array.isArray(s.prayer.events) ? s.prayer : null;
     return {
+      prayer: pr,
       settings: Object.assign({}, d.settings, s.settings || {}, {
         soll: Object.assign({}, d.settings.soll, (s.settings && s.settings.soll) || {}),
-        cats: cl
+        cats: cl,
+        gebetCat: true
       }),
       events: Array.isArray(s.events) ? s.events : d.events
     };
@@ -645,7 +664,10 @@ details textarea { width: 100%; min-height: 90px; margin-top: 6px; padding: 8px;
       }
     }
     imported.events.forEach((r, i) => {
-      if (r[2] >= from && r[2] < to) out.push({ src: "imp", idx: i, date: r[2], s: toMin(r[3]), e: toMin(r[4]), allDay: !!r[5], cat: "studium", title: r[0], loc: r[1] });
+      if (r[2] >= from && r[2] < to) out.push({ src: "imp", kind: "plan", idx: i, date: r[2], s: toMin(r[3]), e: toMin(r[4]), allDay: !!r[5], cat: "studium", title: r[0], loc: r[1] });
+    });
+    if (state.prayer && cats().some(c => c.id === "gebet")) state.prayer.events.forEach((r, i) => {
+      if (r[2] >= from && r[2] < to) out.push({ src: "imp", kind: "prayer", idx: i, date: r[2], s: toMin(r[3]), e: toMin(r[4]), allDay: !!r[5], cat: "gebet", title: r[0], loc: r[1] });
     });
     return out;
   }
@@ -708,18 +730,25 @@ details textarea { width: 100%; min-height: 90px; margin-top: 6px; padding: 8px;
         openEditor(null, { date: d, start: fromMin(m), end: fromMin(Math.min(m + 60, 23 * 60 + 59)) });
       });
       const list = occ.filter(o => o.date === d && !o.allDay).sort((a, b) => a.s - b.s || b.e - a.e);
-      layoutLanes(list);
+      // Gebetszeiten nehmen keinen Platz weg: sie liegen als schmale Markierung über den anderen Terminen
+      const isPrayer = o => o.kind === "prayer";
+      const main = list.filter(o => !isPrayer(o));
+      layoutLanes(main);
+      list.filter(isPrayer).forEach(o => {
+        const hit = main.some(x => x.s < o.e && x.e > o.s);
+        o.lane = 0; o.lanes = 1; o.pin = hit;
+      });
       list.forEach(o => {
         const b = document.createElement("button");
         b.type = "button";
-        b.className = "ev";
+        b.className = "ev" + (isPrayer(o) ? " prayer" + (o.pin ? " pin" : "") : "");
         const endAbs = new Date(parseYmd(o.date).getTime()); endAbs.setMinutes(o.e);
         if (endAbs < now) b.classList.add("past");
         b.style.setProperty("--c", catColor(o.cat));
         b.style.top = ((o.s - h0 * 60) / 60 * HH + 1) + "px";
         b.style.height = Math.max(18, (o.e - o.s) / 60 * HH - 2) + "px";
-        b.style.left = "calc(" + (o.lane / o.lanes * 100) + "% + 2px)";
-        b.style.width = "calc(" + (100 / o.lanes) + "% - 4px)";
+        if (o.pin) { b.style.right = "2px"; b.style.width = "46%"; }
+        else { b.style.left = "calc(" + (o.lane / o.lanes * 100) + "% + 2px)"; b.style.width = "calc(" + (100 / o.lanes) + "% - 4px)"; }
         const t = document.createElement("span"); t.className = "t"; t.textContent = o.title;
         if (o.src === "own" && o.ev.repeat === "weekly") { const r = document.createElement("span"); r.className = "rep"; r.textContent = "↻"; r.title = "Wöchentlich"; t.prepend(r); }
         const m = document.createElement("span"); m.className = "m";
@@ -734,6 +763,7 @@ details textarea { width: 100%; min-height: 90px; margin-top: 6px; padding: 8px;
         });
         b.append(t, m);
         b.title = o.title + "\n" + fromMin(o.s) + "–" + fromMin(o.e) + (o.loc ? "\n" + o.loc : "");
+        if (o.kind === "prayer") b.dataset.time = fromMin(o.s);
         b.addEventListener("click", ev => { ev.stopPropagation(); o.src === "imp" ? openImported(o) : openEditor(o.ev, null, o.date); });
         col.appendChild(b);
       });
@@ -1144,8 +1174,8 @@ details textarea { width: 100%; min-height: 90px; margin-top: 6px; padding: 8px;
 
   function openImported(o) {
     const m = document.createElement("div"); m.className = "modal ro"; m.setAttribute("role", "dialog"); m.setAttribute("aria-modal", "true");
-    m.innerHTML = '<h3></h3><dl><dt>Wann</dt><dd id="r-when"></dd><dt>Raum</dt><dd id="r-loc"></dd><dt>Quelle</dt><dd>Stundenplan der HFU (Import)</dd></dl>' +
-      '<p class="note">Lehrveranstaltungen kommen aus dem Import. Änderungen machst du im Starplan und importierst danach neu.</p>' +
+    m.innerHTML = '<h3></h3><dl><dt>Wann</dt><dd id="r-when"></dd><dt>' + (o.kind === "prayer" ? "Ort" : "Raum") + '</dt><dd id="r-loc"></dd><dt>Quelle</dt><dd>' + (o.kind === "prayer" ? "Gebetszeiten (Import)" : "Stundenplan der HFU (Import)") + '</dd></dl>' +
+      '<p class="note">' + (o.kind === "prayer" ? "Gebetszeiten kommen aus dem Import. Für neue Monate importierst du einfach die nächste Datei." : "Lehrveranstaltungen kommen aus dem Import. Änderungen machst du im Starplan und importierst danach neu.") + '</p>' +
       '<div class="modal-actions"><button class="btn primary" id="r-ok">Schließen</button></div>';
     m.querySelector("h3").textContent = o.title;
     m.querySelector("#r-when").textContent = occDateLabel(o.date) + " " + fromMin(o.s) + "–" + fromMin(o.e);
@@ -1238,13 +1268,48 @@ details textarea { width: 100%; min-height: 90px; margin-top: 6px; padding: 8px;
     statusEl.textContent = ev.length + " Termine vom " + a.toLocaleDateString("de-DE") + " bis " + z.toLocaleDateString("de-DE") +
       (when ? ". Importiert am " + when.toLocaleDateString("de-DE") + " um " + pad(when.getHours()) + ":" + pad(when.getMinutes()) + " Uhr." : ".");
   }
+  const PRAYER_NAMES = { "الفجر": "Fajr", "الشروق": "Shuruq", "الظهر": "Dhuhr", "العصر": "Asr", "المغرب": "Maghrib", "العشاء": "Isha", "صلاة الجمعة": "Jumuʿa (Freitagsgebet)", "الجمعة": "Jumuʿa (Freitagsgebet)" };
+  function looksLikePrayer(text) {
+    return /CATEGORIES:[^\r\n]*Gebet/i.test(text) || /mawaqit/i.test(text) || /X-WR-CALNAME:[^\r\n]*(Gebet|مواقيت|prayer|adhan)/i.test(text) || /SUMMARY:(الفجر|الظهر|العصر|المغرب|العشاء|Fajr|Dhuhr|Maghrib|Isha)\s*$/im.test(text);
+  }
+  function renderPrayerStatus() {
+    const el = document.getElementById("prayerStatus"), del = document.getElementById("prayerDel");
+    const pr = state.prayer;
+    if (!pr || !pr.events.length) { el.hidden = true; del.hidden = true; return; }
+    const a = parseYmd(pr.events[0][2]), z = parseYmd(pr.events[pr.events.length - 1][2]);
+    el.className = "import-status"; el.hidden = false; del.hidden = false;
+    el.textContent = "Gebetszeiten: " + pr.events.length + " Termine vom " + a.toLocaleDateString("de-DE") + " bis " + z.toLocaleDateString("de-DE") + (pr.name ? " (" + pr.name + ")" : "") + ".";
+  }
+  function importPrayer(text, evs) {
+    evs = evs.map(r => { const t = PRAYER_NAMES[r[0]] || r[0]; const short = r.slice(); short[0] = t; if (!short[1]) short[1] = "Moschee";
+      // lange Blöcke kürzen, damit der Kalender übersichtlich bleibt
+      const len = toMin(short[4]) - toMin(short[3]); const max = /Jum/.test(t) ? 45 : 15;
+      if (!short[5] && len > max) short[4] = fromMin(toMin(short[3]) + max);
+      return short; });
+    const m = /X-WR-CALNAME:([^\r\n]*)/i.exec(text);
+    const name = m ? unesc(m[1]).replace(/^مواقيت\s*-\s*/, "").trim() : "";
+    // neue Monate ergänzen: Tage aus der neuen Datei ersetzen, ältere Tage bleiben
+    const days = new Set(evs.map(r => r[2]));
+    const old = state.prayer ? state.prayer.events.filter(r => !days.has(r[2])) : [];
+    const all = old.concat(evs).sort((a, b) => (a[2] + a[3]).localeCompare(b[2] + b[3]));
+    state.prayer = { name, importedAt: new Date().toISOString(), events: all };
+    if (state.settings.hidden.includes("gebet")) state.settings.hidden = state.settings.hidden.filter(h => h !== "gebet");
+    if (!cats().some(c => c.id === "gebet")) state.settings.cats.push({ id: "gebet", name: "Gebet", color: "#3f8f5a", track: false });
+    scheduleSave("planner"); renderLegend(); renderPrayerStatus(); renderGrid();
+    renderImportStatus();
+  }
   function doImport(text) {
     if (!/BEGIN:VCALENDAR/i.test(text)) { renderImportStatus("Das ist keine Kalenderdatei. Erwartet wird eine .ics-Datei, die mit BEGIN:VCALENDAR beginnt.", true); return; }
     let evs;
-    try { evs = parseICS(text); } catch (e) { renderImportStatus("Die Datei konnte nicht gelesen werden. Lade sie im Starplan neu herunter und versuche es noch einmal.", true); return; }
-    if (!evs.length) { renderImportStatus("In der Datei stehen keine Termine. Prüfe im Starplan, ob deine Veranstaltungen ausgewählt sind.", true); return; }
+    try { evs = parseICS(text); } catch (e) { renderImportStatus("Die Datei konnte nicht gelesen werden. Lade sie neu herunter und versuche es noch einmal.", true); return; }
+    if (!evs.length) { renderImportStatus("In der Datei stehen keine Termine.", true); return; }
+    const target = document.getElementById("impTarget").value;
+    if (target === "prayer" || (target === "auto" && looksLikePrayer(text))) { importPrayer(text, evs); jumpToEvents(evs); return; }
     imported = { importedAt: new Date().toISOString(), events: evs };
     scheduleSave("plan"); renderImportStatus(); renderGrid();
+    jumpToEvents(evs);
+  }
+  function jumpToEvents(evs) {
     // zur ersten Woche mit Terminen springen, falls die aktuelle leer ist
     const wkEnd = addDays(viewMonday, 7);
     if (view !== "month" && !evs.some(e => e[2] >= viewMonday && e[2] < wkEnd)) {
@@ -1264,7 +1329,7 @@ details textarea { width: 100%; min-height: 90px; margin-top: 6px; padding: 8px;
   function renderAll() {
     const u = document.getElementById("icalUrl"); if (document.activeElement !== u) u.value = state.settings.icalUrl || DEFAULT_URL;
     document.getElementById("icalOpen").href = state.settings.icalUrl || DEFAULT_URL;
-    renderPanel(); renderLegend(); renderGrid(); renderHours(); renderImportStatus();
+    renderPanel(); renderLegend(); renderGrid(); renderHours(); renderImportStatus(); renderPrayerStatus();
   }
   function renderPanel() {
     document.getElementById("aside").hidden = !showPanel;
@@ -1322,6 +1387,12 @@ details textarea { width: 100%; min-height: 90px; margin-top: 6px; padding: 8px;
   ["dragenter", "dragover"].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add("over"); }));
   ["dragleave", "drop"].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove("over"); }));
   drop.addEventListener("drop", e => readFile(e.dataTransfer && e.dataTransfer.files[0]));
+  document.getElementById("prayerDel").addEventListener("click", () => {
+    const btn = document.getElementById("prayerDel");
+    if (btn.dataset.confirm !== "1") { btn.dataset.confirm = "1"; btn.textContent = "Wirklich entfernen?"; setTimeout(() => { btn.dataset.confirm = ""; btn.textContent = "Gebetszeiten entfernen"; }, 4000); return; }
+    btn.dataset.confirm = ""; btn.textContent = "Gebetszeiten entfernen";
+    state.prayer = null; scheduleSave("planner"); renderPrayerStatus(); renderGrid();
+  });
   document.getElementById("icsPasteBtn").addEventListener("click", () => doImport(document.getElementById("icsPaste").value));
   setInterval(() => { renderGrid(); }, 60000);
 
