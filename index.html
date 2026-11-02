@@ -86,7 +86,7 @@ header.top { display: flex; flex-wrap: wrap; align-items: flex-end; justify-cont
 .todo-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .todo-head h3 { margin: 0; font-family: var(--f-display); font-size: 0.95rem; font-weight: 700; }
 .todos { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
-.todos li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 4px 2px; border-radius: 6px; }
+.todos li { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 4px 2px; border-radius: 6px; }
 .todos li:hover { background: var(--sunk); }
 .todos input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent); cursor: pointer; margin: 0; }
 .todos .tx { overflow-wrap: anywhere; cursor: text; }
@@ -94,6 +94,10 @@ header.top { display: flex; flex-wrap: wrap; align-items: flex-end; justify-cont
 .todos .tx-edit { padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); width: 100%; min-width: 0; }
 .todos .del { border: 0; background: none; color: var(--muted); font-size: 1rem; line-height: 1; padding: 2px 6px; border-radius: 4px; }
 .todos .del:hover { color: var(--now); background: var(--surface); }
+.todos .grip { border: 0; background: none; color: var(--muted); cursor: grab; padding: 2px 4px; font-size: 0.95rem; line-height: 1; letter-spacing: -2px; touch-action: none; border-radius: 4px; }
+.todos .grip:hover { color: var(--ink); background: var(--surface); }
+.todos li.dragging { background: var(--surface); box-shadow: 0 6px 16px -8px color-mix(in oklab, var(--ink) 45%, transparent); position: relative; z-index: 2; }
+.todos li.dragging .grip { cursor: grabbing; }
 .todo-add { display: flex; gap: 6px; }
 .todo-add input { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
 .notes-badge { margin-left: 6px; font-family: var(--f-mono); font-size: 0.72rem; background: var(--accent); color: var(--accent-ink); border-radius: 999px; padding: 0 6px; }
@@ -1382,12 +1386,59 @@ details textarea { width: 100%; min-height: 90px; margin-top: 6px; padding: 8px;
       tx.addEventListener("click", () => editTodo(li, tx, t));
       const del = document.createElement("button"); del.type = "button"; del.className = "del"; del.textContent = "×"; del.setAttribute("aria-label", "To-do löschen: " + t.text);
       del.addEventListener("click", () => { n.todos = n.todos.filter(x => x !== t); saveNotes(); renderNotes(); });
-      li.append(cb, tx, del); list.appendChild(li);
+      const grip = document.createElement("button"); grip.type = "button"; grip.className = "grip"; grip.textContent = "⋮⋮";
+      grip.setAttribute("aria-label", "Verschieben: " + t.text + ". Mit Pfeil hoch oder runter verschieben");
+      grip.addEventListener("pointerdown", e => startDrag(e, li));
+      grip.addEventListener("keydown", e => { if (e.key === "ArrowUp" || e.key === "ArrowDown") { e.preventDefault(); moveTodo(t, e.key === "ArrowUp" ? -1 : 1); } });
+      li.dataset.id = t.id; li.dataset.done = t.done ? "1" : "";
+      li.append(grip, cb, tx, del); list.appendChild(li);
     });
     const open = n.todos.filter(t => !t.done).length, done = n.todos.length - open;
     document.getElementById("todoCount").textContent = n.todos.length ? open + " offen" + (done ? " · " + done + " erledigt" : "") : "Noch keine To-dos";
     document.getElementById("todoClear").hidden = !done;
     const badge = document.getElementById("notesBadge"); badge.hidden = !open; badge.textContent = open;
+  }
+  // Reihenfolge: offene To-dos untereinander, erledigte bleiben unten
+  function orderFromDom() {
+    const n = ensureNotes(), byId = new Map(n.todos.map(t => [t.id, t]));
+    const ids = [...document.querySelectorAll("#todoList li")].map(li => li.dataset.id);
+    const sorted = ids.map(id => byId.get(id)).filter(Boolean);
+    n.todos.forEach(t => { if (!sorted.includes(t)) sorted.push(t); });
+    n.todos = sorted;
+  }
+  function moveTodo(t, dir) {
+    const n = ensureNotes();
+    const group = n.todos.filter(x => x.done === t.done);
+    const i = group.indexOf(t), j = i + dir;
+    if (j < 0 || j >= group.length) return;
+    const other = group[j], a = n.todos.indexOf(t), b = n.todos.indexOf(other);
+    n.todos[a] = other; n.todos[b] = t;
+    saveNotes(); renderNotes();
+    const g = document.querySelector('#todoList li[data-id="' + t.id + '"] .grip'); if (g) g.focus();
+  }
+  function startDrag(e, li) {
+    if (e.button !== undefined && e.button !== 0) return;
+    e.preventDefault();
+    const list = document.getElementById("todoList");
+    const grip = e.currentTarget;
+    li.classList.add("dragging");
+    const startY = e.clientY; let moved = false;
+    const siblings = () => [...list.children].filter(x => x !== li && x.dataset.done === li.dataset.done);
+    const onMove = ev => {
+      if (Math.abs(ev.clientY - startY) > 3) moved = true;
+      const sibs = siblings();
+      let before = null;
+      for (const s of sibs) { const r = s.getBoundingClientRect(); if (ev.clientY < r.top + r.height / 2) { before = s; break; } }
+      if (before) { if (li.nextElementSibling !== before) list.insertBefore(li, before); }
+      else { const last = sibs[sibs.length - 1]; if (last && last.nextElementSibling !== li) last.after(li); }
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove); window.removeEventListener("pointerup", onUp); window.removeEventListener("pointercancel", onUp);
+      li.classList.remove("dragging");
+      if (moved) { orderFromDom(); saveNotes(); }
+      renderNotes();
+    };
+    window.addEventListener("pointermove", onMove); window.addEventListener("pointerup", onUp); window.addEventListener("pointercancel", onUp);
   }
   function editTodo(li, tx, t) {
     const inp = document.createElement("input"); inp.className = "tx-edit"; inp.value = t.text; inp.setAttribute("aria-label", "To-do bearbeiten");
