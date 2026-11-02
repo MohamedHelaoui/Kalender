@@ -82,6 +82,24 @@ header.top { display: flex; flex-wrap: wrap; align-items: flex-end; justify-cont
 @media (max-width: 980px) { .layout { grid-template-columns: minmax(0, 1fr); } }
 .layout.nopanel { grid-template-columns: minmax(0, 1fr); }
 .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.notes-text { width: 100%; min-height: 130px; resize: vertical; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); line-height: 1.5; font-size: 0.9rem; }
+.todo-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.todo-head h3 { margin: 0; font-family: var(--f-display); font-size: 0.95rem; font-weight: 700; }
+.todos { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.todos li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 4px 2px; border-radius: 6px; }
+.todos li:hover { background: var(--sunk); }
+.todos input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent); cursor: pointer; margin: 0; }
+.todos .tx { overflow-wrap: anywhere; cursor: text; }
+.todos li.done .tx { text-decoration: line-through; color: var(--muted); }
+.todos .tx-edit { padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); width: 100%; min-width: 0; }
+.todos .del { border: 0; background: none; color: var(--muted); font-size: 1rem; line-height: 1; padding: 2px 6px; border-radius: 4px; }
+.todos .del:hover { color: var(--now); background: var(--surface); }
+.todo-add { display: flex; gap: 6px; }
+.todo-add input { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.notes-badge { margin-left: 6px; font-family: var(--f-mono); font-size: 0.72rem; background: var(--accent); color: var(--accent-ink); border-radius: 999px; padding: 0 6px; }
+.modal.notes-modal { width: min(560px, 100%); padding: 0; background: transparent; border: 0; box-shadow: none; }
+.modal.notes-modal .panel { box-shadow: 0 20px 50px -20px rgba(0,0,0,0.4); }
+.notes-close { justify-self: end; }
 .imp-target select { padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
 .acc-form { display: grid; gap: 8px; }
 .acc-form input { padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); width: 100%; min-width: 0; }
@@ -240,6 +258,7 @@ details textarea { width: 100%; min-height: 90px; margin-top: 6px; padding: 8px;
     <div class="nav">
       <span class="save-state" id="saveState">Lädt …</span>
       <button class="btn small" id="hdrSignIn" hidden>Anmelden</button>
+      <button class="btn small" id="notesBtn" aria-haspopup="dialog">Notizen<span class="notes-badge" id="notesBadge" hidden></span></button>
       <button class="btn icon" id="prevW" aria-label="Zurück">←</button>
       <button class="btn" id="todayBtn">Heute</button>
       <button class="btn icon" id="nextW" aria-label="Weiter">→</button>
@@ -267,6 +286,17 @@ details textarea { width: 100%; min-height: 90px; margin-top: 6px; padding: 8px;
     </section>
 
     <aside id="aside">
+      <div id="notesHome"><section class="panel notes" aria-labelledby="nTitle" id="notesPanel">
+        <div class="panel-head"><h2 id="nTitle">Notizen</h2><span class="save-state" id="notesState"></span></div>
+        <textarea id="notesText" class="notes-text" placeholder="Allgemeine Notizen, z. B. Prüfungsanmeldung bis 15.11., Bücher zurückgeben …" aria-label="Notizen"></textarea>
+        <div class="todo-head"><h3>To-dos</h3><span class="note" id="todoCount"></span></div>
+        <ul class="todos" id="todoList"></ul>
+        <form class="todo-add" id="todoForm">
+          <input id="todoInput" placeholder="Neues To-do …" aria-label="Neues To-do" autocomplete="off">
+          <button class="btn small" type="submit">Hinzufügen</button>
+        </form>
+        <button class="linkbtn" id="todoClear" hidden>Erledigte löschen</button>
+      </section></div>
       <section class="panel" aria-labelledby="aTitle" id="accPanel">
         <h2 id="aTitle">Konto &amp; Sicherung</h2>
         <p class="note" id="accState">Lädt …</p>
@@ -462,7 +492,11 @@ details textarea { width: 100%; min-height: 90px; margin-top: 6px; padding: 8px;
         cats: cl,
         gebetCat: true
       }),
-      events: Array.isArray(s.events) ? s.events : d.events
+      events: Array.isArray(s.events) ? s.events : d.events,
+      notes: {
+        text: s.notes && typeof s.notes.text === "string" ? s.notes.text : "",
+        todos: s.notes && Array.isArray(s.notes.todos) ? s.notes.todos.filter(t => t && typeof t.text === "string").map(t => ({ id: t.id || uid(), text: t.text, done: !!t.done })) : []
+      }
     };
   }
 
@@ -989,9 +1023,10 @@ details textarea { width: 100%; min-height: 90px; margin-top: 6px; padding: 8px;
   // ---------- Dialoge ----------
   const modalRoot = document.getElementById("modalRoot");
   let lastFocus = null;
-  function closeModal() { modalRoot.innerHTML = ""; if (lastFocus && lastFocus.focus) lastFocus.focus(); }
+  function closeModal() { if (modalRoot.__onClose) { const f = modalRoot.__onClose; modalRoot.__onClose = null; f(); } modalRoot.innerHTML = ""; if (lastFocus && lastFocus.focus) lastFocus.focus(); }
   function showModal(node) {
     lastFocus = document.activeElement;
+    if (modalRoot.__onClose) { const f = modalRoot.__onClose; modalRoot.__onClose = null; f(); }
     modalRoot.innerHTML = "";
     const bg = document.createElement("div"); bg.className = "modal-bg";
     bg.addEventListener("mousedown", e => { if (e.target === bg) closeModal(); });
@@ -1326,10 +1361,67 @@ details textarea { width: 100%; min-height: 90px; margin-top: 6px; padding: 8px;
   }
 
   // ---------- Verdrahtung ----------
+  // ---------- Notizen & To-dos ----------
+  function ensureNotes() { if (!state.notes) state.notes = { text: "", todos: [] }; return state.notes; }
+  let notesTimer = null;
+  function renderNotes() {
+    const n = ensureNotes();
+    const ta = document.getElementById("notesText");
+    if (document.activeElement !== ta && ta.value !== n.text) ta.value = n.text;
+    const list = document.getElementById("todoList");
+    const editing = list.querySelector(".tx-edit");
+    if (editing) return; // nicht neu zeichnen, während ein To-do bearbeitet wird
+    list.innerHTML = "";
+    const order = n.todos.filter(t => !t.done).concat(n.todos.filter(t => t.done));
+    order.forEach(t => {
+      const li = document.createElement("li"); if (t.done) li.className = "done";
+      const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = t.done; cb.id = "todo-" + t.id;
+      cb.setAttribute("aria-label", "Erledigt: " + t.text);
+      cb.addEventListener("change", () => { t.done = cb.checked; saveNotes(); renderNotes(); });
+      const tx = document.createElement("span"); tx.className = "tx"; tx.textContent = t.text; tx.title = "Zum Bearbeiten klicken";
+      tx.addEventListener("click", () => editTodo(li, tx, t));
+      const del = document.createElement("button"); del.type = "button"; del.className = "del"; del.textContent = "×"; del.setAttribute("aria-label", "To-do löschen: " + t.text);
+      del.addEventListener("click", () => { n.todos = n.todos.filter(x => x !== t); saveNotes(); renderNotes(); });
+      li.append(cb, tx, del); list.appendChild(li);
+    });
+    const open = n.todos.filter(t => !t.done).length, done = n.todos.length - open;
+    document.getElementById("todoCount").textContent = n.todos.length ? open + " offen" + (done ? " · " + done + " erledigt" : "") : "Noch keine To-dos";
+    document.getElementById("todoClear").hidden = !done;
+    const badge = document.getElementById("notesBadge"); badge.hidden = !open; badge.textContent = open;
+  }
+  function editTodo(li, tx, t) {
+    const inp = document.createElement("input"); inp.className = "tx-edit"; inp.value = t.text; inp.setAttribute("aria-label", "To-do bearbeiten");
+    tx.replaceWith(inp); inp.focus(); inp.select();
+    let done = false;
+    const finish = save => {
+      if (done) return; done = true;
+      const v = inp.value.trim();
+      if (save && v) t.text = v; else if (save && !v) ensureNotes().todos = ensureNotes().todos.filter(x => x !== t);
+      inp.remove(); if (save) saveNotes(); renderNotes();
+    };
+    inp.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); finish(true); } else if (e.key === "Escape") { e.stopPropagation(); finish(false); } });
+    inp.addEventListener("blur", () => finish(true));
+  }
+  function saveNotes() {
+    document.getElementById("notesState").textContent = "Speichert …";
+    scheduleSave("planner");
+    clearTimeout(notesTimer); notesTimer = setTimeout(() => { document.getElementById("notesState").textContent = "Gespeichert"; }, 900);
+  }
+  function openNotes() {
+    const panel = document.getElementById("notesPanel"), home = document.getElementById("notesHome");
+    const m = document.createElement("div"); m.className = "modal notes-modal"; m.setAttribute("role", "dialog"); m.setAttribute("aria-modal", "true"); m.setAttribute("aria-label", "Notizen");
+    const close = document.createElement("button"); close.type = "button"; close.className = "btn small notes-close"; close.textContent = "Schließen";
+    close.addEventListener("click", closeModal);
+    m.append(close, panel);
+    showModal(m);
+    modalRoot.__onClose = () => { home.appendChild(panel); };
+    document.getElementById("notesText").focus();
+  }
+
   function renderAll() {
     const u = document.getElementById("icalUrl"); if (document.activeElement !== u) u.value = state.settings.icalUrl || DEFAULT_URL;
     document.getElementById("icalOpen").href = state.settings.icalUrl || DEFAULT_URL;
-    renderPanel(); renderLegend(); renderGrid(); renderHours(); renderImportStatus(); renderPrayerStatus();
+    renderPanel(); renderLegend(); renderGrid(); renderHours(); renderImportStatus(); renderPrayerStatus(); renderNotes();
   }
   function renderPanel() {
     document.getElementById("aside").hidden = !showPanel;
@@ -1398,6 +1490,18 @@ details textarea { width: 100%; min-height: 90px; margin-top: 6px; padding: 8px;
 
   document.getElementById("accForm").addEventListener("submit", signIn);
   document.getElementById("signUpBtn").addEventListener("click", signUp);
+  document.getElementById("notesBtn").addEventListener("click", openNotes);
+  document.getElementById("notesText").addEventListener("input", e => { ensureNotes().text = e.target.value; saveNotes(); });
+  document.getElementById("notesText").addEventListener("blur", () => renderNotes());
+  document.getElementById("todoForm").addEventListener("submit", e => {
+    e.preventDefault();
+    const inp = document.getElementById("todoInput"); const v = inp.value.trim(); if (!v) return;
+    ensureNotes().todos.push({ id: uid(), text: v, done: false }); inp.value = "";
+    saveNotes(); renderNotes(); inp.focus();
+  });
+  document.getElementById("todoClear").addEventListener("click", () => {
+    const n = ensureNotes(); n.todos = n.todos.filter(t => !t.done); saveNotes(); renderNotes();
+  });
   document.getElementById("hdrSignIn").addEventListener("click", () => {
     if (!showPanel) { showPanel = true; saveView(); renderPanel(); }
     document.getElementById("accPanel").scrollIntoView({ behavior: "smooth", block: "start" });
